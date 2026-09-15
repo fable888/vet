@@ -310,3 +310,20 @@ PID=1459134
 | Tool 2 `REVIEW: sim_error` | RPC lỗi giữa fork | chạy lại riêng token đó |
 | Bot: `vetted=0` dù đã copy | file có CRLF hoặc thiếu ngày sau chữ `vetted` | `sed -i 's/\r$//' pairs.txt`, kiểm định dạng `vetted 2026-09-16` |
 | Bot: `pair.vet_fail` cho token PASS | token đổi tax sau khi vet | xóa token, commit |
+
+Quy tắc chung trong WSL, thư mục `~/bsc-sandwich`: sửa xong → xem đã đổi gì → thêm → commit → kiểm.
+
+```bash
+cd ~/bsc-sandwich
+git status --short          # liệt kê file đã đổi (M = sửa, ?? = file mới)
+git diff                    # xem nội dung đổi, nhấn q để thoát (bỏ qua nếu không cần)
+git add <tên file>          # ví dụ: git add pairs.txt config.toml
+git commit -m "mô tả ngắn: đổi gì, vì sao"
+git log -1 --oneline        # thấy hash + message vừa commit
+```
+
+Ví dụ với lần vừa rồi (chỉ đổi thứ tự RPC trong `.env`): **không cần commit**, vì `.env` nằm trong `.gitignore` — `git status` sẽ không hiện nó. Đó là cố ý.
+
+Muốn thêm tất cả file đã đổi một lượt: `git add -A` (nhớ nhìn `git status` trước để không lỡ thêm file rác như log). Muốn bỏ thay đổi của một file chưa commit: `git checkout -- <tên file>`.
+
+Mẹo viết message để sau này (và auditor) đọc lại hiểu ngay: `pairs.txt: +13 meme PASS`, `config: bật scan_quote_usdt`, `.env.example: đổi thứ tự RPC, blxr xuống cuối`. Không cần dài.
