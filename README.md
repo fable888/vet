@@ -156,49 +156,137 @@ Trả lời "có, có, không" → bỏ. Nếu giữ: tự sửa dòng trong `pa
 
 ---
 
-## PHẦN 3 — Đưa vào bot (WSL)
+## PHẦN 3 — Đưa vào bot (WSL) — QUY TRÌNH ĐÃ CHẠY THẬT 2026-09-16
 
-### Bước 3.1 — Gộp file
+Nguyên tắc: **thay toàn bộ phần thân `pairs.txt`** bằng các file `pairs.pass.txt` của
+Tool 2, KHÔNG dùng `cat >>` (append) — append từng làm dính 2 địa chỉ vào 1 dòng khi
+dòng cuối thiếu ký tự xuống dòng, và không xóa được dòng cũ đã FAIL.
+
+Có 2 lần chạy Tool 2 cần gộp:
+- `groupA…` = danh sách blue-chip trong `pairs.txt` cũ, chạy với `--allow-proxy`
+  (chỉ để token Binance-Peg qua).
+- `meme…` = danh sách từ Tool 1, chạy KHÔNG `--allow-proxy`.
+
+### Bước 3.1 — Gộp 2 file PASS, bỏ proxy ngoài Binance-Peg, bỏ trùng
 
 Mở cửa sổ Ubuntu:
 
 ```bash
 cd ~/bsc-sandwich
-cp pairs.txt state/pairs.backup_$(date +%Y%m%d).txt
+cp pairs.txt state/pairs.backup_$(date +%Y%m%d_%H%M).txt      # backup
+
+grep '^#' pairs.txt > state/header.txt                        # giữ phần comment đầu file
 
 W=/mnt/c/Users/Admin/Documents/vet-bsc-token/out
-cat $W/groupA_YYYYMMDD/pairs.pass.txt $W/meme_YYYYMMDD/pairs.pass.txt > state/merged.txt
-sed -i 's/\r$//' state/merged.txt          # bỏ ký tự CRLF của Windows
-grep -c '^0x' state/merged.txt             # số dòng token
-grep -c 'vetted 2026' state/merged.txt     # phải bằng số trên
+cp $W/groupA*/pairs.pass.txt state/passA.txt
+cp $W/meme*/pairs.pass.txt   state/passM.txt
+sed -i 's/\r$//' state/passA.txt state/passM.txt              # bỏ CRLF của Windows
+
+# --allow-proxy cho qua MỌI proxy; chỉ giữ proxy của Binance-Peg (admin 0xd2f9…),
+# bỏ 6 proxy của bên khác:
+grep -vE '# (U|QQQB|PEX|BSCPAD|USD1|SANTOS) \|' state/passA.txt > state/passA_final.txt
+
+# gộp A + M, bỏ trùng theo địa chỉ (kể cả ",0xUSDT"), mỗi dòng 1 token:
+cat state/passA_final.txt state/passM.txt | awk '$1 ~ /^0x/ && !seen[tolower($1)]++' > state/body.txt
 ```
 
-Nếu có dòng REVIEW bạn đã tự duyệt ở 2.5, thêm vào `state/merged.txt` trước khi ghép.
-
-### Bước 3.2 — Thay phần thân pairs.txt
-
-Giữ nguyên phần header (các dòng `#` đầu file), thay toàn bộ dòng token bằng `merged.txt`:
+### Bước 3.2 — Ghép header + thân, kiểm tra, commit
 
 ```bash
-grep '^#' pairs.txt > state/header.txt
-cat state/header.txt state/merged.txt > pairs.txt
-grep -c '^0x' pairs.txt
-git add pairs.txt && git commit -m "pairs.txt: vet $(date +%Y-%m-%d) — $(grep -c '^0x' pairs.txt) token"
+cat state/header.txt state/body.txt > pairs.txt
+
+grep -c '^0x' pairs.txt              # số dòng token (lần này: 89)
+grep -c 'vetted 2026' pairs.txt      # = số trên + 2 (2 dòng comment header cũng có chữ này)
+awk '$1 ~ /^0x/ && gsub(/0x[0-9a-fA-F]{40}/,"&")>2' pairs.txt   # PHẢI RỖNG: không dòng nào dính 2 token
+
+git add pairs.txt && git commit -m "pairs.txt: <N> token PASS (groupA + meme), thay toàn bộ thân file"
 ```
 
-### Bước 3.3 — Kiểm bot nhận đúng
+Nếu `ls $W/` không có thư mục tên `groupA…`/`meme…` thì sửa 2 dòng `cp` theo tên thật.
+
+### Bước 3.3 — Bật quote USDT nếu có pool USDT
+
+Dòng dạng `0xToken,0x55d398…7955 # …` là pool USDT. Bot chỉ nhận chúng khi
+`scan_quote_usdt = true`:
 
 ```bash
-scripts/paper_run.sh --minutes 3 --port 18799
+sed -i 's/^scan_quote_usdt *=.*/scan_quote_usdt = true/' config.toml
+grep -n 'scan_quote_usdt' config.toml
+git add config.toml && git commit -m "config: bật scan_quote_usdt"
 ```
 
-Nhìn 3 chỗ trong output:
+### Bước 3.4 — Kiểm bot nhận đúng (bot tự đo lại tax bằng revm)
 
-- `pairs.txt: tong=… vetted=…` — `vetted` phải bằng số dòng bạn vừa thêm.
-- `/api/pairs` (hoặc `curl -s 127.0.0.1:18799/api/pairs` khi bot đang chạy): cột
-  `buy_bps`/`sell_bps` = 0, `honeypot` = false.
-- `grep pair.vet_fail logs/bot.jsonl | tail` — dòng nào xuất hiện ở đây là token bot đo
-  ra có tax thật → xóa khỏi `pairs.txt`, commit lại.
+```bash
+scripts/paper_run.sh --minutes 5 --port 18799
+grep -c '"event":"pair.vet_fail"' logs/bot.jsonl
+grep '"event":"pair.vet_fail"' logs/bot.jsonl | tail -5
+```
+
+Đọc:
+- Dòng `pairs.txt: tong=… vetted=…` — `vetted` phải bằng số dòng token.
+- `pair.vet_fail` = 0 → toàn bộ danh sách được bot xác nhận lại. Nếu > 0: token đó thực
+  ra có tax → xóa dòng khỏi `pairs.txt`, commit lại.
+- `/api/skips`: `honeypot_or_tax` phải ≈ 0, `unprofitable`/`victim_would_revert` > 0
+  (chứng tỏ candidate đã tới bước tính lãi/lỗ).
+
+### Kết quả lần làm 2026-09-16 (để đối chiếu)
+
+| Nguồn | Vào Tool 2 | PASS | REVIEW | FAIL | Giữ |
+|---|---|---|---|---|---|
+| groupA (`--allow-proxy`) | 93 | 82 | 6 | 5 (tax: FLOKI, Jager, GIGGLE, 雪球, LIGHT) | 76 (bỏ 6 proxy ngoài Binance) |
+| meme50 (Tool 1) | 50 | 23 | 1 (CAT/USDT) | 26 (tax ẩn, chặn mua DEX, cấm cùng block, honeypot) | 13 mới (10 trùng groupA) |
+| **Tổng `pairs.txt`** | | | | | **89** (7 pool USDT) |
+
+Bài học: `contract_name = Token` KHÔNG đảm bảo sạch (Pro, IBS, VTA, BNBDXS là `Token`
+mà có tax 2,5–10 %). Chỉ tin bước mua/bán thử của Tool 2.
+
+### Log nguyên văn lần chạy 2026-09-16 (đây là "đúng" trông như thế nào)
+
+```
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ grep '^#' pairs.txt > state/header.txt
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ cp /mnt/c/Users/Admin/Documents/vet-bsc-token/out/groupA*/pairs.pass.txt state/passA.txt
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ sed -i 's/\r$//' state/passA.txt state/passM.txt
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ grep -vE '# (U|QQQB|PEX|BSCPAD|USD1|SANTOS) \|' state/passA.txt > state/passA_final.txt
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ cat state/passA_final.txt state/passM.txt | awk '$1 ~ /^0x/ && !seen[tolower($1)]++' > state/body.txt
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ cat state/header.txt state/body.txt > pairs.txt
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ grep -c '^0x' pairs.txt; grep -c 'vetted 2026' pairs.txt
+89
+91
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ awk '$1 ~ /^0x/ && gsub(/0x[0-9a-fA-F]{40}/,"&")>2' pairs.txt
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ git add pairs.txt && git commit -m "pairs.txt: 89 token PASS (groupA 76 + meme 13), thay toàn bộ thân file"
+[master 10f5d1c] pairs.txt: 89 token PASS (groupA 76 + meme 13), thay toàn bộ thân file
+ 1 file changed, 77 insertions(+), 93 deletions(-)
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ grep 'vetted 2026' pairs.txt | grep -vc '^0x'
+2
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ sed -i 's/^scan_quote_usdt *=.*/scan_quote_usdt = true/' config.toml
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ grep -n 'scan_quote_usdt' config.toml
+91:# không quy đổi/không trộn với WBNB trong 1 đường sim). scan_quote_usdt=false
+96:scan_quote_usdt = true
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ git add config.toml && git commit -m "config: bật scan_quote_usdt cho 7 pool USDT đã vet"
+[master 6b49943] config: bật scan_quote_usdt cho 7 pool USDT đã vet
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+dmin@DESKTOP-31M4TNT:~/bsc-sandwich$ scripts/paper_run.sh --minutes 5 --port 18799
+== may chay: WSL (repo: /home/dmin/bsc-sandwich) ==
+BSC_WS host = bsc-rpc.publicnode.com,wss (KHONG in URL day du)
+  -> khop publicnode, OK
+== cargo build --release ==
+    Finished `release` profile [optimized] target(s) in 0.32s
+== binary sha256 = 33f84ed709a658fb93d0bee2531ee39c5c718fbf74a565971bead0a9dec22bdf ==
+== git HEAD = 6b49943defecda408cb1a4235e96af79e5b75322 ==
+da xoa state/halt.lock (neu co)
+== config TAM (chi nguong ve 0 + web_port, GIU NGUYEN sim_engine/pair_scan_universal/scan_quote_usdt tu config.toml that), port 18799 ==
+== pairs.txt (grep tho, xem sim.evm/pair.unvetted trong log de co so that): tong=89 vetted=89 chua_vet=0 ==
+== chay bot 5 phut, log -> logs/paper_run_1789474602.log (bot.jsonl tu dong 197388) ==
+PID=1459134
+```
+
+Đọc log này:
+- `89` / `91` / `2`: 89 dòng token, 2 dòng header cũng chứa chữ "vetted 2026" → khớp.
+- Lệnh `awk … >2` không in gì → không dòng nào bị dính 2 địa chỉ.
+- `77 insertions, 93 deletions`: thay toàn bộ thân file (93 dòng cũ ra, 77 + header vào).
+- `tong=89 vetted=89 chua_vet=0` từ chính bot → bot đọc đúng file.
+- `config.toml` dòng 96 `= true`, dòng 91 chỉ là comment — bình thường.
 
 ---
 
