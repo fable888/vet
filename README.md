@@ -178,8 +178,8 @@ cp pairs.txt state/pairs.backup_$(date +%Y%m%d_%H%M).txt      # backup
 grep '^#' pairs.txt > state/header.txt                        # giữ phần comment đầu file
 
 W=/mnt/c/Users/Admin/Documents/vet-bsc-token/out
-cp $W/groupA*/pairs.pass.txt state/passA.txt
-cp $W/meme*/pairs.pass.txt   state/passM.txt
+cp $W/groupA*/pairs.pass.txt state/passA.txt                  # đổi tên 
+cp $W/meme*/pairs.pass.txt   state/passM.txt                  # đổi tên 
 sed -i 's/\r$//' state/passA.txt state/passM.txt              # bỏ CRLF của Windows
 
 # --allow-proxy cho qua MỌI proxy; chỉ giữ proxy của Binance-Peg (admin 0xd2f9…),
