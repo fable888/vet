@@ -1,159 +1,224 @@
-Được, và với danh sách vài trăm token thì check tay là cách hợp lý — miễn là bạn hiểu "an toàn cho sandwich" rộng hơn "không tax, không honeypot". Đây là checklist thực tế và cách làm đỡ tốn công.
+# GHI CHÚ — Quy trình tìm và vet token cho `pairs.txt`
 
-**Điều kiện tiên quyết để check được**
-- Contract phải **verified** trên BscScan (có source). Không verified → loại luôn, không cần nghĩ.
-- Nếu là **proxy** (BscScan hiện tab "Read as Proxy") → owner có thể đổi toàn bộ logic bất cứ lúc nào → loại, trừ các stablecoin/blue-chip lớn (USDT, USDC, USD1 đều là proxy nhưng chấp nhận được vì rủi ro là "đóng băng" chứ không phải "đổi tax").
+Ba nơi làm việc:
 
-**Đọc source: tìm những thứ này (Ctrl+F trong tab Contract)**
-
-| Tìm | Nghĩa | Kết luận |
+| Việc | Thư mục | Chạy bằng |
 |---|---|---|
-| `fee`, `tax`, `_taxFee`, `liquidityFee`, `marketingWallet` | có cơ chế tax | Nếu tax hiện = 0 nhưng có `setFee`/`setTax` → owner đổi được → loại (hoặc chỉ nhận khi đã `renounceOwnership`) |
-| `blacklist`, `isBlacklisted`, `_isBot`, `sniper`, `banned` | chặn địa chỉ | loại nếu owner còn quyền thêm |
-| `maxTxAmount`, `maxWallet`, `_maxTx` | giới hạn giao dịch | front-run size bị chặn → phải biết số, hoặc loại |
-| `cooldown`, `lastTrade`, `block.number`, `antiBot`, `launchBlock`, `tradingEnabled` | **anti-MEV** | **Quan trọng nhất cho sandwich**: token cấm mua và bán trong cùng block, hoặc cooldown vài giây → bot lỗ chắc. Loại |
-| `pause`, `whenNotPaused`, `tradingOpen` | dừng giao dịch | loại nếu owner còn quyền |
-| `mint` không giới hạn, `rebase`, `reflect`, `_rOwned` | rebase/reflection | balance thay đổi ngầm → sim sai → loại |
-| `onlyOwner` + `owner()` ≠ `0x000…dEaD` | owner còn quyền | mọi thứ trên đều có thể bật lại sau |
+| Tool 1 — quét pool | `C:\Users\Admin\Documents\scan-pancake-v2-token-pool` | cmd hoặc PowerShell (Windows) |
+| Tool 2 — vet token | `C:\Users\Admin\Documents\vet-bsc-token` | cmd hoặc PowerShell (Windows) |
+| Bot | `~/bsc-sandwich` (WSL Ubuntu) | cửa sổ Ubuntu |
 
-**Tự động hóa 80% công việc trước khi đọc tay**
-- GoPlus Token Security API (miễn phí, chain 56, batch nhiều địa chỉ): trả `buy_tax`, `sell_tax`, `is_honeypot`, `is_blacklisted`, `is_proxy`, `is_mintable`, `can_take_back_ownership`, `trading_cooldown`, `transfer_pausable`, `anti_whale`, `owner_change_balance`. Loại thẳng token nào có cờ xấu, chỉ đọc tay phần còn lại.
-- honeypot.is và tokensniffer.com để đối chiếu thêm 1 nguồn.
-- `measure_tax_evm` của chính bot (đã có) để xác nhận số buy/sell bps thật tại block hiện tại.
+Luồng: **Tool 1** tìm token có pool V2 (WBNB/USDT) đang có swap thật → **Tool 2** kiểm
+từng token (đọc source + mua/bán thử trên fork) → dòng PASS copy vào `pairs.txt` của
+bot → bot tự đo lại tax mỗi 10 phút.
 
-**Điều kiện pool**
-- Pair V2 với WBNB hoặc USDT, `reserve_quote ≥ 20 BNB` (hoặc ≥ 10.000 USDT), và **là pool có volume thật** (mở BscScan pair, tab Transactions, thấy swap đều đặn). Pool lớn mà không ai swap thì không có victim.
+Mỗi tool có `.env` riêng, làm 1 lần:
 
-**Sau khi vet tay, vẫn cần 2 thứ tự động**
-1. Bot vet lại định kỳ (10 phút) bằng `measure_tax_evm` — bắt trường hợp owner bật tax/blacklist sau khi bạn check.
-2. Live: đo lại đúng token đó ngay trước khi ký.
-
-Gợi ý định dạng `pairs.txt` để ghi kết quả check tay, bot đọc được:
 ```
-0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82 # CAKE | vetted 2026-09-15 | tax 0/0 | owner renounced | no cooldown
+BSC_HTTP=https://bsc.rpc.blxrbdn.com,https://rpc-bsc.48.club,https://bsc-dataseed1.bnbchain.org,https://bsc-dataseed1.defibit.io,https://bsc-rpc.publicnode.com
+BSCSCAN_API_KEY=<key Etherscan V2 của bạn>
 ```
 
-Với 100 token hiện tại, GoPlus lọc trong 5 phút, đọc tay phần còn lại (ước 30–40 token) khoảng 2–3 giờ. Bạn muốn mình viết script GoPlus batch cho `pairs.txt` để đưa vào lệnh cụm 2 không?
+Không dán `.env` hay key vào chat. Nếu lỡ dán, tạo key mới ngay.
 
-# pairs.txt — cum pair-mode (MODE 2 ONLY, Chu chot 2026-09-15).
-# Dong bat dau bang # la comment. Dinh dang 1 dong:
-#   0xTokenAddress # SYMBOL | vetted YYYY-MM-DD | tax b/s | owner ... | note
-# Bot CHI doc "vetted YYYY-MM-DD". Thieu ngay -> CHUA VET -> khong sim.
-# Bot van tu do lai tax bang revm (pairs_vet_task, moi 600s) va loai dong nao
-# tax>0/honeypot (log pair.vet_fail) - day la luoi an toan, KHONG thay vet tay.
-#
-# NHOM A - dien "vetted" san: token lon, Binance-Peg hoac du an lau nam, khong
-# tax/honeypot/cooldown theo hieu biet cong khai. Chu van nen mo DexScreener
-# xem volume pool V2 truoc khi len live (nhieu token lon volume nam o V3).
-# NHOM B - de trong "vetted": GoPlus REVIEW hoac token meme/four.meme (duoi
-# 4444) - Chu tu doc source BscScan roi dien.
-# NHOM C - da XOA khoi file: GoPlus FAIL (pausable/cooldown/take-back-owner)
-# hoac token co reflection/tax lich su. Ghi lai o cuoi file de doi chieu.
-#
-# ===== NHOM A: dien san vetted 2026-09-16 =====
-0x55d398326f99059fF775485246999027B3197955 # USDT | vetted 2026-09-16 | tax 0/0 | owner Binance (proxy) | reserve_wbnb~=52619 BNB, quote asset
-0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82 # CAKE | vetted 2026-09-16 | tax 0/0 | owner Pancake (mintable, MasterChef) | reserve_wbnb~=14002 BNB, volume phan lon o V3
-0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56 # BUSD | vetted 2026-09-16 | tax 0/0 | owner Binance | reserve_wbnb~=6245 BNB, BUSD dang bi thu hoi - volume thap, can nhac bo
-0x2170Ed0880ac9A755fd29B2688956BD959F933F8 # ETH | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=2190 BNB, volume phan lon o V3
-0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c # BTCB | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=2162 BNB, volume phan lon o V3
-0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d # USDC | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=294 BNB
-0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d # USD1 | vetted 2026-09-16 | tax 0/0 | owner WLFI (proxy) | reserve_wbnb~=125 BNB
-0xbA2aE424d960c26247Dd6c32edC70B295c744C43 # DOGE | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=638 BNB
-0x1D2F0da169ceB9fC7B3144628dB156f3F6c60dBE # XRP | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=535 BNB
-0xF8A0BF9cF54Bb92F17374d9e9A321E6a111a51bD # LINK | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=366 BNB
-0x3EE2200Efb3400fAbB9AacF31297cBdD1d435D47 # ADA | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=343 BNB
-0x4B0F1812e5Df2A09796481Ff14017e6005508003 # TWT | vetted 2026-09-16 | tax 0/0 | owner Trust Wallet | reserve_wbnb~=246 BNB
-0x85EAC5Ac2F758618dFa09bDbe0cf174e7d574D5B # TRX | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=241 BNB
-0xBf5140A22578168FD562DCcF235E5D43A02ce9B1 # UNI | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=241 BNB
-0x7083609fCE4d1d8Dc0C979AAb8c869Ea2C873402 # DOT | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=162 BNB
-0x1CE0c2827e2eF14D5C4f29a091d735A204794041 # AVAX | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=125 BNB
-0x1Fa4a73a3F0133f0025378af00236f3aBDEE5D63 # NEAR | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=87 BNB
-0x4338665CBB7B2485A8855A139b75D5e34AB0DB94 # LTC | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=54 BNB
-0x2859e4544C4bB03966803b044A93563Bd2D0DD4D # SHIB | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=39 BNB
-0xa2B726B1145A4773F68593CF171187d8EBe4d495 # INJ | vetted 2026-09-16 | tax 0/0 | owner Binance-Peg | reserve_wbnb~=135 BNB
-0xD41FDb03Ba84762dD66a0af1a6C8540FF1ba5dfb # SFP | vetted 2026-09-16 | tax 0/0 | owner SafePal | reserve_wbnb~=199 BNB
-0xaEC945e04baF28b135Fa7c640f624f8D90F1C3a6 # C98 | vetted 2026-09-16 | tax 0/0 | owner Coin98 | reserve_wbnb~=192 BNB
-0xcF6BB5389c92Bdda8a3747Ddb454cB7a64626C63 # XVS | vetted 2026-09-16 | tax 0/0 | owner Venus | reserve_wbnb~=77 BNB
-0x3203c9E46cA618C8C1cE5dC67e7e9D75f5da2377 # MBOX | vetted 2026-09-16 | tax 0/0 | owner Mobox | reserve_wbnb~=153 BNB
-0xAC51066d7bEC65Dc4589368da368b212745d63E8 # ALICE | vetted 2026-09-16 | tax 0/0 | owner MyNeighborAlice | reserve_wbnb~=35 BNB
-0x78F5d389F5CDCcFc41594aBaB4B0Ed02F31398b3 # APX | vetted 2026-09-16 | tax 0/0 | owner ApolloX | reserve_wbnb~=35 BNB
-0x9f589e3eabe42ebC94A44727b3f3531C0c877809 # TKO | vetted 2026-09-16 | tax 0/0 | owner Tokocrypto | reserve_wbnb~=48 BNB
-0xA8c2B8eec3d368C0253ad3dae65a5F2BBB89c929 # CTK | vetted 2026-09-16 | tax 0/0 | owner CertiK/Shentu | reserve_wbnb~=48 BNB
-0xf7DE7E8A6bd59ED41a4b5fe50278b3B7f31384dF # RDNT | vetted 2026-09-16 | tax 0/0 | owner Radiant | reserve_wbnb~=65 BNB
-0xA7f552078dcC247C2684336020c03648500C6d9F # EPS | vetted 2026-09-16 | tax 0/0 | owner Ellipsis | reserve_wbnb~=57 BNB, du an cu - kiem volume
-0x43a8cab15D06d3a5fE5854D714C37E7E9246F170 # ORBS | vetted 2026-09-16 | tax 0/0 | owner Orbs | reserve_wbnb~=105 BNB
-0x23CE9e926048273eF83be0A3A8Ba9Cb6D45cd978 # DAR | vetted 2026-09-16 | tax 0/0 | owner Mines of Dalarnia | reserve_wbnb~=164 BNB
-0x5A3010d4d8D3B5fB49f8B6E57FB9E48063f16700 # BSCPAD | vetted 2026-09-16 | tax 0/0 | owner BSCPad | reserve_wbnb~=234 BNB
-0xECa41281c24451168a37211F0bc2b8645AF45092 # TPT | vetted 2026-09-16 | tax 0/0 | owner TokenPocket | reserve_wbnb~=267 BNB
-0xE0e514c71282b6f4e823703a39374Cf58dc3eA4f # BELT | vetted 2026-09-16 | tax 0/0 | owner Belt | reserve_wbnb~=162 BNB, du an cu - kiem volume
-0x12BB890508c125661E03b09EC06E404bc9289040 # RACA | vetted 2026-09-16 | tax 0/0 | owner Radio Caca | reserve_wbnb~=33 BNB
-0x1633b7157e7638C4d6593436111Bf125Ee74703F # SPS | vetted 2026-09-16 | tax 0/0 | owner Splinterlands | reserve_wbnb~=35 BNB
-0xB2BD0749DBE21f623d9BABa856D3B0f0e1BFEc9C # DUSK | vetted 2026-09-16 | tax 0/0 | owner Dusk (Binance-Peg) | reserve_wbnb~=41 BNB
-0x05aD6E30A855BE07AfA57e08a4f30d00810a402e # TINC | vetted 2026-09-16 | tax 0/0 | owner Tiny World | reserve_wbnb~=40 BNB
-0xb4404DaB7C0eC48b428Cf37DeC7fb628bcC41B36 # GEAR | vetted 2026-09-16 | tax 0/0 | owner MetaGear | reserve_wbnb~=43 BNB
-0x00e1656e45f18ec6747F5a8496Fd39B50b38396D # BCOIN | vetted 2026-09-16 | tax 0/0 | owner Bomb Crypto | reserve_wbnb~=166 BNB
-0xe6DF05CE8C8301223373CF5B969AFCb1498c5528 # KOGE | vetted 2026-09-16 | tax 0/0 | owner 48 Club | reserve_wbnb~=51 BNB
-0x000Ae314E2A2172a039B26378814C252734f556A # ASTER | vetted 2026-09-16 | tax 0/0 | owner Aster DEX | reserve_wbnb~=58 BNB, token moi 2025 - Chu xac nhan lai owner
-0xA64455a4553C9034236734FadDAddbb64aCE4Cc7 # SANTOS | vetted 2026-09-16 | tax 0/0 | owner Binance fan token | reserve_wbnb~=69 BNB
-#
-# ===== NHOM B: CHUA VET - Chu doc source BscScan (GoPlus REVIEW hoac meme) =====
-0xfb5B838b6cfEEdC2873aB27866079AC55363D37E # FLOKI | vetted | tax ? | owner active | reserve_wbnb~=6227 BNB, tung co tax 3%, kiem setTax hien tai
-0xD40bEDb44C081D2935eebA6eF5a3c8A31A1bBE13 # HERO | vetted | tax ? | owner ? | reserve_wbnb~=5120 BNB
-0x92aa03137385F18539301349dcfC9EbC923fFb10 # SKYAI | vetted | tax ? | owner ? | reserve_wbnb~=4375 BNB, GoPlus PASS
-0x6894CDe390a3f51155ea41Ed24a33A4827d3063D # CAT | vetted | tax ? | owner ? | reserve_wbnb~=3799 BNB
-0x6bdcCe4A559076e37755a78Ce0c06214E59e4444 # B | vetted | tax ? | owner ? | reserve_wbnb~=2072 BNB, four.meme
-0xd5eaAaC47bD1993d661bc087E15dfb079a7f3C19 # KOMA | vetted | tax ? | owner ? | reserve_wbnb~=1823 BNB
-0x82Ec31D69b3c289E541b50E30681FD1ACAd24444 # 哈基米 | vetted | tax ? | owner ? | reserve_wbnb~=1493 BNB, four.meme
-0x0A43fC31a73013089DF59194872Ecae4cAe14444 # 4 | vetted | tax ? | owner ? | reserve_wbnb~=1095 BNB, four.meme
-0x51363F073b1E4920fdA7AA9E9d84BA97EdE1560e # BOB | vetted | tax ? | owner ? | reserve_wbnb~=950 BNB
-0xc51A9250795c0186a6FB4A7D20A90330651e4444 # 我踏马来了 | vetted | tax ? | owner ? | reserve_wbnb~=730 BNB, four.meme
-0x74836cC0E821A6bE18e407E6388E430B689C66e9 # Jager | vetted | tax ? | owner ? | reserve_wbnb~=586 BNB
-0x20d6015660b3fe52e6690a889b5C51F69902cE0e # GIGGLE | vetted | tax ? | owner ? | reserve_wbnb~=551 BNB
-0x6d5AD1592ed9D6D1dF9b93c793AB759573Ed6714 # Broccoli | vetted | tax ? | owner ? | reserve_wbnb~=450 BNB
-0x3aC8e2c113D5D7824aC6ebe82a3c60b1B9D64444 # 客服小何 | vetted | tax ? | owner ? | reserve_wbnb~=382 BNB, four.meme
-0x44443dd87EC4d1bEa3425AcC118Adb023f07F91b # 修仙 | vetted | tax ? | owner ? | reserve_wbnb~=331 BNB, four.meme
-0x02e75d28A8AA2a0033b8cf866fCf0bB0E1eE4444 # PALU | vetted | tax ? | owner ? | reserve_wbnb~=314 BNB, four.meme
-0xe92F7Fe3EAf61DF28b7B75f3FaAB199333c42302 # MAME | vetted | tax ? | owner ? | reserve_wbnb~=301 BNB
-0x44440f83419DE123d7d411187aDb9962db017d03 # BNBHolder | vetted | tax ? | owner ? | reserve_wbnb~=289 BNB, four.meme
-0x671ECbCb89EE3F85E2199294E723D309d98C4444 # 哭哭马 | vetted | tax ? | owner ? | reserve_wbnb~=273 BNB, four.meme
-0x36F2FD027F5f27C59B8C6d64dF64bcC8E8C97777 # 雪球 | vetted | tax ? | owner ? | reserve_wbnb~=259 BNB
-0x232FB065D9d24c34708eeDbF03724f2e95ABE768 # SHEESHA | vetted | tax ? | owner ? | reserve_wbnb~=253 BNB
-0x1a1E69F1e6182e2F8b9e8987E83C016ac9444444 # 人生K线 | vetted | tax ? | owner ? | reserve_wbnb~=231 BNB, four.meme
-0x59E69094398AfbEA632F8Bd63033BdD2443a3Be1 # MONKY | vetted | tax ? | owner ? | reserve_wbnb~=179 BNB
-0x1a5F9d77CA46646cD4937fD8d093F460B66F4444 # 老子 | vetted | tax ? | owner ? | reserve_wbnb~=178 BNB, four.meme
-0x86Bb94DdD16Efc8bc58e6b056e8df71D9e666429 # TST | vetted | tax ? | owner ? | reserve_wbnb~=156 BNB
-0xf9C6e80e9A5807A1214a79449009b48104F94444 # 黑马 | vetted | tax ? | owner ? | reserve_wbnb~=148 BNB, four.meme
-0xD48474E7444727bF500a32D5AbE01943f3A59A64 # BBT | vetted | tax ? | owner ? | reserve_wbnb~=143 BNB
-0xcE24439F2D9C6a2289F741120FE202248B666666 # U | vetted | tax ? | owner ? | reserve_wbnb~=114 BNB
-0x73b84F7E3901F39FC29F3704a03126D317Ab4444 # PUP | vetted | tax ? | owner ? | reserve_wbnb~=113 BNB, four.meme
-0xA49fA5E8106E2d6d6a69E78df9B6A20AaB9c4444 # DONKEY | vetted | tax ? | owner ? | reserve_wbnb~=113 BNB, four.meme
-0x4444B1e4De34Df52cF91E30cc7c0336Ee03D7c1B # meme rush | vetted | tax ? | owner ? | reserve_wbnb~=112 BNB, four.meme
-0x925c8Ab7A9a8a148E87CD7f1EC7ECc3625864444 # DOYR | vetted | tax ? | owner ? | reserve_wbnb~=110 BNB, four.meme
-0x44448aCa77cc60e77c90B6A60851b1BB843CC2ee # 奶龙 | vetted | tax ? | owner ? | reserve_wbnb~=87 BNB, four.meme
-0x932Fb7f52adBC34ff81B4342b8C036b7b8Ac4444 # Dust | vetted | tax ? | owner ? | reserve_wbnb~=81 BNB, four.meme
-0x4AD663403df2F0E7987bC9C74561687472e1611C # FROG | vetted | tax ? | owner ? | reserve_wbnb~=75 BNB
-0x205812CdBed920aFf76C6580abD681a46D11efc7 # QQQB | vetted | tax ? | owner ? | reserve_wbnb~=73 BNB
-0x6a0b66710567b6beb81A71F7e9466450a91a384b # PEX | vetted | tax ? | owner ? | reserve_wbnb~=71 BNB
-0xcF640FDF9b3d9E45cbd69fDA91D7e22579c14444 # gorilla | vetted | tax ? | owner ? | reserve_wbnb~=69 BNB, four.meme
-0xC9849E6fdB743d08fAeE3E34dd2D1bc69EA11a51 # BUNNY | vetted | tax ? | owner ? | reserve_wbnb~=66 BNB, du an cu (PancakeBunny) - kiem volume
-0x037838b556d9c9d654148a284682C55bB5f56eF4 # LIGHT | vetted | tax ? | owner ? | reserve_wbnb~=66 BNB
-0x444416A582466fDAE0f2Fcdf0A859675f8fF6e9f # MarsCoin | vetted | tax ? | owner ? | reserve_wbnb~=62 BNB, four.meme
-0x837A130aED114300Bab4f9f1F4f500682f7efd48 # WSI | vetted | tax ? | owner ? | reserve_wbnb~=58 BNB
-0xE1E93E92C0c2Aff2dC4D7d4A8b250d973cAd4444 # 恶俗企鹅 | vetted | tax ? | owner ? | reserve_wbnb~=53 BNB, four.meme
-0x1eE098cBaF1f846d5Df1993f7e2d10AFb35A878d # SABLE | vetted | tax ? | owner ? | reserve_wbnb~=46 BNB
-0xb77a1BD00D9C7FF5e15D70C7f78e4b80E18E4444 # 財務自由 | vetted | tax ? | owner ? | reserve_wbnb~=44 BNB, four.meme
-0x4444Bd221671F322671Bfdb3F33A653D2B7605c8 # 0x4444 | vetted | tax ? | owner ? | reserve_wbnb~=43 BNB, four.meme
-0xA524B11473b7Ce7EB1dc883A585e64471A734444 # JobIess | vetted | tax ? | owner ? | reserve_wbnb~=39 BNB, four.meme
-0x640C04CA09c5C5140E62FEf42c59E3aFdBbd4444 # 我的刀盾 | vetted | tax ? | owner ? | reserve_wbnb~=39 BNB, four.meme
-0x2789033DFE80593f69d689f65892a75aFA491111 # WM | vetted | tax ? | owner ? | reserve_wbnb~=33 BNB
-#
-# ===== NHOM C: DA XOA (khong phai dong du lieu, chi ghi nho) =====
-# 0x924fa68a0FC644485b8df8AbfA0A41C2e7744444  币安人生   GoPlus FAIL transfer_pausable
-# 0x08ba0619b1e7A582E0BCe5BBE9843322C954C340  BMON       GoPlus FAIL trading_cooldown (anti-MEV)
-# 0x5Ac52EE5b2a633895292Ff6d8A89bB9190451587  BSCX       GoPlus FAIL can_take_back_ownership, hidden_owner
-# 0xc748673057861a797275CD8A068AbB95A902e8de  BabyDoge   tax/anti_whale (reflection)
-# 0xdB8D30b74bf098aF214e862C90E647bbB1fcC58c  BABYCAKE   reflection token, tax
-# 0x0DF0587216a4a1bB7d5082fdc491d93d2dD4B413  Cheems     tung co tax, owner active
-# 0x32B407ee915432Be6D3F168bc1EfF2a6F8b2034C  HODL       reflection token, tax
-# (17 dong FAIL con lai trong bang vet_goplus.sh cua Code: Chu doi chieu
-#  state/pairs_goplus.tsv va xoa them neu thuoc nhom B o tren)
+---
+
+## PHẦN 1 — Tool 1: quét token có pool + có swap thật
+
+### Bước 1.1 — Mở thư mục, build (chỉ lần đầu hoặc sau khi sửa code)
+
+```
+cd C:\Users\Admin\Documents\scan-pancake-v2-token-pool
+cargo build --release
+```
+
+Kỳ vọng: `Finished release ...`. Lỗi thì đọc dòng đỏ đầu tiên.
+
+### Bước 1.2 — Chạy quét 24 giờ
+
+```
+cargo run --release -- --hours 24 --existing \\wsl$\Ubuntu\home\dmin\bsc-sandwich\pairs.txt --out out\run_YYYYMMDD
+```
+
+- `--hours 24`: quét 24 giờ gần nhất (BSC 0,45 s/block → ~192.000 block). Lần đầu thử
+  `--hours 2` cho nhanh.
+- `--existing …pairs.txt`: để cột `in_existing` báo token nào bot đã có. Nếu đường dẫn
+  `\\wsl$` không đọc được, thay bằng `\\wsl.localhost\Ubuntu\home\dmin\bsc-sandwich\pairs.txt`.
+- `--out out\run_YYYYMMDD`: thư mục kết quả, đặt theo ngày để không đè.
+
+Thời gian: ~15–20 phút. Nếu thấy nhiều dòng `429`/`-32005` là RPC bị giới hạn, tool tự
+đổi URL và chạy tiếp — không cần làm gì.
+
+Tham số hay chỉnh:
+
+| Muốn | Thêm |
+|---|---|
+| Chỉ pool WBNB | `--quote wbnb` |
+| Chỉ pool USDT | `--quote usdt` |
+| Victim tối thiểu 0,1 BNB thay vì 0,05 | `--min-swap-bnb 0.1` |
+| Pool phải ≥ 50 BNB | `--min-reserve-bnb 50` |
+| Lấy 500 dòng thay vì 300 | `--top 500` |
+
+### Bước 1.3 — Đọc kết quả
+
+Trong `out\run_YYYYMMDD\`:
+
+- `discover_v2.tsv` — mở bằng Excel (tab-separated). Cột quan trọng:
+  - `swaps_ge_min`: số lần có người mua ≥ 0,05 BNB trong 24 h → **đây là "mồi"**. Càng cao càng tốt.
+  - `reserve_quote`: thanh khoản pool (BNB hoặc USDT).
+  - `verified`: `yes` mới xét tiếp.
+  - `proxy`: `0` mới xét tiếp (trừ token Binance-Peg lớn).
+  - `contract_name`: tên contract trên BscScan.
+    - `FlapTaxTokenV2/V3` = **có tax theo thiết kế → bỏ luôn**.
+    - `Token` = mẫu four.meme (thường 0 tax) → ứng viên tốt, vẫn phải vet.
+  - `in_existing`: `vetted` = bot đã có; `chua_vet` = có trong pairs.txt nhưng chưa điền ngày; `khong_co` = mới.
+- `pairs.candidates.txt` — cùng danh sách, đã đúng định dạng `pairs.txt`, ô `vetted` để trống.
+
+### Bước 1.4 — Chọn danh sách đưa sang Tool 2
+
+Trong Excel: lọc `verified = yes`, `proxy = 0`, `contract_name` không chứa `Flap`,
+`swaps_ge_min ≥ 300`. Sắp giảm dần theo `swaps_ge_min`. Lấy 30–50 dòng đầu.
+
+Cách nhanh không cần Excel (PowerShell, tạo file 50 dòng đầu):
+
+```powershell
+Get-Content out\run_YYYYMMDD\pairs.candidates.txt | Select-Object -First 50 | Set-Content out\run_YYYYMMDD\top50.txt
+```
+
+(Danh sách này chưa lọc Flap/proxy — Tool 2 sẽ tự FAIL chúng, chỉ tốn thời gian chạy.)
+
+---
+
+## PHẦN 2 — Tool 2: vet từng token
+
+### Bước 2.1 — Mở thư mục, build
+
+```
+cd C:\Users\Admin\Documents\vet-bsc-token
+cargo build --release
+```
+
+### Bước 2.2 — Chạy vet danh sách từ Tool 1
+
+```
+cargo run --release -- --in C:\Users\Admin\Documents\scan-pancake-v2-token-pool\out\run_YYYYMMDD\top50.txt --date 2026-09-16 --out out\meme_YYYYMMDD
+```
+
+- `--date`: ngày sẽ ghi vào ô `vetted` của dòng PASS. Dùng ngày hôm đó.
+- `--out`: thư mục kết quả riêng cho lần chạy.
+
+Mỗi token mất ~10–30 giây (đọc source + 6 bước mua/bán thử trên fork). 50 token ≈ 10–20 phút.
+
+### Bước 2.3 — Vet lại danh sách blue-chip đang có trong pairs.txt của bot
+
+Token Binance-Peg (ETH, BTCB, XRP, USDC…) là proxy của Binance → mặc định bị FAIL. Với
+riêng nhóm này cho phép proxy:
+
+```
+cargo run --release -- --in \\wsl$\Ubuntu\home\dmin\bsc-sandwich\pairs.txt --date 2026-09-16 --allow-proxy --out out\groupA_YYYYMMDD
+```
+
+**Không** dùng `--allow-proxy` cho danh sách meme.
+
+### Bước 2.4 — Đọc kết quả
+
+Trong `out\<tên>\`:
+
+| File | Nghĩa | Bạn làm gì |
+|---|---|---|
+| `pairs.pass.txt` | Token đạt. Ô `vetted <ngày>`, `tax 0/0`, `owner …` đã điền sẵn | Copy sang `pairs.txt` của bot |
+| `pairs.review.txt` | Không rõ: source có dấu hiệu (fee/blacklist/cooldown…) nhưng mua/bán thử vẫn OK, và owner còn quyền | Đọc tay trên BscScan (mục 2.5). Nghi ngờ thì bỏ |
+| `pairs.fail.txt` | Loại: tax > 0, honeypot, cooldown, proxy, chưa verify, pool mỏng… | Bỏ. Không cần đọc thêm |
+| `vet_report.tsv` | Bảng đầy đủ (mở Excel) | Xem khi cần lý do chi tiết |
+| `vet_steps.tsv` | Số từng bước D1–D6 | Chỉ xem khi debug |
+
+Ý nghĩa cột `reasons` hay gặp:
+
+- `buy_tax_bps=300` → mua mất 3 %. Loại.
+- `honeypot` → mua được, bán không được. Loại.
+- `cooldown` → cùng block bán bị chặn, block sau bán được. Sandwich không dùng được. Loại.
+- `same_wallet_same_block` → cùng ví mua rồi bán trong 1 block bị chặn. Loại.
+- `max_tx` / `anti_whale` → mua lớn (1 % reserve) bị chặn hoặc bị bớt. Loại.
+- `proxy` → contract nâng cấp được. Loại (trừ Binance-Peg với `--allow-proxy`).
+- `not_verified` → không có source. Loại.
+
+### Bước 2.5 — Đọc tay nhóm REVIEW (chỉ nhóm này)
+
+Mở `https://bscscan.com/address/<token>#code`, Ctrl+F các từ trong cột `static_groups`
+của `vet_report.tsv` (ví dụ `setFee`, `blacklist`, `cooldown`, `pause`). Hỏi 3 câu:
+
+1. Hàm đó có `onlyOwner` không? Owner còn là ví thật (`owner = active …`)?
+2. Nếu owner bật hàm đó lên, bot có bị chặn bán hoặc mất tiền không?
+3. Token có đáng (nhiều `swaps_ge_min`) để chấp nhận rủi ro đó không?
+
+Trả lời "có, có, không" → bỏ. Nếu giữ: tự sửa dòng trong `pairs.review.txt`: xóa phần
+`REVIEW: …` ở cuối, điền `vetted 2026-09-16` vào ô trống, rồi coi như PASS.
+
+---
+
+## PHẦN 3 — Đưa vào bot (WSL)
+
+### Bước 3.1 — Gộp file
+
+Mở cửa sổ Ubuntu:
+
+```bash
+cd ~/bsc-sandwich
+cp pairs.txt state/pairs.backup_$(date +%Y%m%d).txt
+
+W=/mnt/c/Users/Admin/Documents/vet-bsc-token/out
+cat $W/groupA_YYYYMMDD/pairs.pass.txt $W/meme_YYYYMMDD/pairs.pass.txt > state/merged.txt
+sed -i 's/\r$//' state/merged.txt          # bỏ ký tự CRLF của Windows
+grep -c '^0x' state/merged.txt             # số dòng token
+grep -c 'vetted 2026' state/merged.txt     # phải bằng số trên
+```
+
+Nếu có dòng REVIEW bạn đã tự duyệt ở 2.5, thêm vào `state/merged.txt` trước khi ghép.
+
+### Bước 3.2 — Thay phần thân pairs.txt
+
+Giữ nguyên phần header (các dòng `#` đầu file), thay toàn bộ dòng token bằng `merged.txt`:
+
+```bash
+grep '^#' pairs.txt > state/header.txt
+cat state/header.txt state/merged.txt > pairs.txt
+grep -c '^0x' pairs.txt
+git add pairs.txt && git commit -m "pairs.txt: vet $(date +%Y-%m-%d) — $(grep -c '^0x' pairs.txt) token"
+```
+
+### Bước 3.3 — Kiểm bot nhận đúng
+
+```bash
+scripts/paper_run.sh --minutes 3 --port 18799
+```
+
+Nhìn 3 chỗ trong output:
+
+- `pairs.txt: tong=… vetted=…` — `vetted` phải bằng số dòng bạn vừa thêm.
+- `/api/pairs` (hoặc `curl -s 127.0.0.1:18799/api/pairs` khi bot đang chạy): cột
+  `buy_bps`/`sell_bps` = 0, `honeypot` = false.
+- `grep pair.vet_fail logs/bot.jsonl | tail` — dòng nào xuất hiện ở đây là token bot đo
+  ra có tax thật → xóa khỏi `pairs.txt`, commit lại.
+
+---
+
+## PHẦN 4 — Làm lại định kỳ
+
+- **Hàng tuần**: chạy lại Tool 1 (`--existing` trỏ pairs.txt), lấy token mới lọt top,
+  vet bằng Tool 2, thêm vào. Token cũ không còn `swaps_ge_min` đáng kể thì xóa cho nhẹ.
+- **Khi bot báo `pair.vet_fail`**: xóa token đó, không cần vet lại.
+- **Trước khi lên live**: chạy lại Tool 2 cho toàn bộ `pairs.txt` với ngày mới, vì PASS
+  chỉ đúng tại thời điểm đo.
+
+---
+
+## Sự cố thường gặp
+
+| Hiện tượng | Nguyên nhân | Làm gì |
+|---|---|---|
+| `The system cannot find the path specified` | đường dẫn `--in`/`--existing` sai | `Test-Path <đường dẫn>` phải ra `True` |
+| Tool 1 báo `429`/`-32005` liên tục | RPC free bị giới hạn | để tool tự đổi URL; hoặc giảm `--hours` |
+| Tool 2 nhiều dòng `REVIEW: static_unavailable` | Etherscan API lỗi / hết quota key | chạy lại sau vài phút, hoặc `--skip-static` (chỉ dựa mua/bán thử) |
+| Tool 2 `REVIEW: sim_error` | RPC lỗi giữa fork | chạy lại riêng token đó |
+| Bot: `vetted=0` dù đã copy | file có CRLF hoặc thiếu ngày sau chữ `vetted` | `sed -i 's/\r$//' pairs.txt`, kiểm định dạng `vetted 2026-09-16` |
+| Bot: `pair.vet_fail` cho token PASS | token đổi tax sau khi vet | xóa token, commit |
