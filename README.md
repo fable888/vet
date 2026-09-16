@@ -4,8 +4,8 @@ Ba nơi làm việc:
 
 | Việc | Thư mục | Chạy bằng |
 |---|---|---|
-| Tool 1 — quét pool | `C:\Users\Admin\Documents\scan-pancake-v2-token-pool` | cmd hoặc PowerShell (Windows) |
-| Tool 2 — vet token | `C:\Users\Admin\Documents\vet-bsc-token` | cmd hoặc PowerShell (Windows) |
+| Tool 1 — quét pool | cd `C:\Users\Admin\Documents\scan-pancake-v2-token-pool` | cmd hoặc PowerShell (Windows) |
+| Tool 2 — vet token | cd `C:\Users\Admin\Documents\vet-bsc-token` | cmd hoặc PowerShell (Windows) |
 | Bot | `~/bsc-sandwich` (WSL Ubuntu) | cửa sổ Ubuntu |
 
 Luồng: **Tool 1** tìm token có pool V2 (WBNB/USDT) đang có swap thật → **Tool 2** kiểm
