@@ -37,7 +37,7 @@ Kỳ vọng: `Finished release ...`. Lỗi thì đọc dòng đỏ đầu tiên.
 ### Bước 1.2 — Chạy quét 24 giờ
 
 ```
-cargo run --release -- --hours 24 --existing \\wsl$\Ubuntu\home\dmin\bsc-sandwich\pairs.txt --out out\run_YYYYMMDD
+cargo run --release -- --hours 24 --existing \\wsl$\Ubuntu\home\dmin\bsc-sandwich\pairs.txt --out out\run_01
 ```
 
 - `--hours 24`: quét 24 giờ gần nhất (BSC 0,45 s/block → ~192.000 block). Lần đầu thử
